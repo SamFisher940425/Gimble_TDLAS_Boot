@@ -1,20 +1,20 @@
 /* USER CODE BEGIN Header */
 /**
-  ******************************************************************************
-  * @file           : main.c
-  * @brief          : Main program body
-  ******************************************************************************
-  * @attention
-  *
-  * Copyright (c) 2024 STMicroelectronics.
-  * All rights reserved.
-  *
-  * This software is licensed under terms that can be found in the LICENSE file
-  * in the root directory of this software component.
-  * If no LICENSE file comes with this software, it is provided AS-IS.
-  *
-  ******************************************************************************
-  */
+ ******************************************************************************
+ * @file           : main.c
+ * @brief          : Main program body
+ ******************************************************************************
+ * @attention
+ *
+ * Copyright (c) 2024 STMicroelectronics.
+ * All rights reserved.
+ *
+ * This software is licensed under terms that can be found in the LICENSE file
+ * in the root directory of this software component.
+ * If no LICENSE file comes with this software, it is provided AS-IS.
+ *
+ ******************************************************************************
+ */
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
@@ -28,12 +28,13 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-
+#include "flash.h"
+#include "ota.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
-
+typedef void (*pFunction)(void); /*!< Function pointer definition */
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
@@ -49,13 +50,21 @@
 /* Private variables ---------------------------------------------------------*/
 
 /* USER CODE BEGIN PV */
+extern enum OTA_STATUS g_ota_status;
+extern uint64_t last_cmd_time;
 
+volatile uint32_t g_ota_flag = 0;
+volatile uint32_t g_fw_size = 0;
+
+volatile uint8_t g_rs485_c1_state = 0; // 0 idle 1 receiving 2 decoding 3 sending
+volatile uint8_t g_rs485_c1_tx_buf[RS485_C1_TX_DATA_LENGTH] = {0};
+volatile uint8_t g_rs485_c1_rx_buf[RS485_C1_RX_DATA_LENGTH] = {0};
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 /* USER CODE BEGIN PFP */
-
+void HAL_USART_RxCpltCallback(USART_HandleTypeDef *husart);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -64,13 +73,30 @@ void SystemClock_Config(void);
 /* USER CODE END 0 */
 
 /**
-  * @brief  The application entry point.
-  * @retval int
-  */
+ * @brief  The application entry point.
+ * @retval int
+ */
 int main(void)
 {
 
   /* USER CODE BEGIN 1 */
+  __HAL_DBGMCU_FREEZE_IWDG();
+  __HAL_DBGMCU_FREEZE_WWDG();
+
+  // valid firmware or blank
+  g_ota_flag = Read_OTA_Flag();
+  g_fw_size = Read_OTA_Size();
+
+  // g_ota_flag = OTA_GOTO_BOOT_FLAG;
+  if (((g_ota_flag == OTA_GOTO_JUMP_FLAG) || (g_ota_flag == 0xFFFFFFFF)) && ((*(uint32_t *)(MAIN_PROGRAM_ADDR)) != 0xFFFFFFFF))
+  {
+    Jump_To_Main_Application();
+  }
+  if (g_ota_flag == OTA_GOTO_BOOT_FLAG)
+  {
+    g_ota_status = OTA_STATUS_NOT_STARTED_IN_BOOT;
+    Erase_All_Page();
+  }
 
   /* USER CODE END 1 */
 
@@ -101,7 +127,8 @@ int main(void)
   MX_CAN_Init();
   MX_TIM4_Init();
   /* USER CODE BEGIN 2 */
-
+  RS485_Status_Set(RS485_CH1, RS485_READ);
+  HAL_UART_Receive_IT(&huart3, (uint8_t *)g_rs485_c1_rx_buf, 1);
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -109,16 +136,34 @@ int main(void)
   while (1)
   {
     /* USER CODE END WHILE */
+    HAL_IWDG_Refresh(&hiwdg);
 
+    OTA_CMD_Parse();
+
+    if (g_ota_status == OTA_STATUS_NOT_STARTED_IN_BOOT)
+    {
+      HAL_GPIO_WritePin(LED_2_GPIO_Port, LED_2_Pin, GPIO_PIN_SET);
+    }
+    else if (g_ota_status == OTA_STATUS_UPDATING)
+    {
+      if (HAL_GetTick() - last_cmd_time < 1000)
+      {
+        HAL_GPIO_WritePin(LED_2_GPIO_Port, LED_2_Pin, GPIO_PIN_RESET);
+      }
+      else
+      {
+        HAL_GPIO_WritePin(LED_2_GPIO_Port, LED_2_Pin, GPIO_PIN_SET);
+      }
+    }
     /* USER CODE BEGIN 3 */
   }
   /* USER CODE END 3 */
 }
 
 /**
-  * @brief System Clock Configuration
-  * @retval None
-  */
+ * @brief System Clock Configuration
+ * @retval None
+ */
 void SystemClock_Config(void)
 {
   RCC_OscInitTypeDef RCC_OscInitStruct = {0};
@@ -126,9 +171,9 @@ void SystemClock_Config(void)
   RCC_PeriphCLKInitTypeDef PeriphClkInit = {0};
 
   /** Initializes the RCC Oscillators according to the specified parameters
-  * in the RCC_OscInitTypeDef structure.
-  */
-  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_LSI|RCC_OSCILLATORTYPE_HSE;
+   * in the RCC_OscInitTypeDef structure.
+   */
+  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_LSI | RCC_OSCILLATORTYPE_HSE;
   RCC_OscInitStruct.HSEState = RCC_HSE_ON;
   RCC_OscInitStruct.HSEPredivValue = RCC_HSE_PREDIV_DIV1;
   RCC_OscInitStruct.HSIState = RCC_HSI_ON;
@@ -142,9 +187,8 @@ void SystemClock_Config(void)
   }
 
   /** Initializes the CPU, AHB and APB buses clocks
-  */
-  RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK|RCC_CLOCKTYPE_SYSCLK
-                              |RCC_CLOCKTYPE_PCLK1|RCC_CLOCKTYPE_PCLK2;
+   */
+  RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK | RCC_CLOCKTYPE_SYSCLK | RCC_CLOCKTYPE_PCLK1 | RCC_CLOCKTYPE_PCLK2;
   RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
   RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
   RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV2;
@@ -163,23 +207,88 @@ void SystemClock_Config(void)
 }
 
 /* USER CODE BEGIN 4 */
+void Jump_To_Main_Application(void)
+{
+  uint32_t JumpAddress = *(__IO uint32_t *)(MAIN_PROGRAM_ADDR + 4);
+  pFunction Jump_To_Application;
 
+  // disable systick
+  SysTick->CTRL = 0;
+
+  __set_MSP(*(__IO uint32_t *)MAIN_PROGRAM_ADDR);
+  // SCB->VTOR = MAIN_PROGRAM_ADDR;
+  Jump_To_Application = (pFunction)JumpAddress;
+  Jump_To_Application();
+}
+
+void HAL_USART_RxCpltCallback(USART_HandleTypeDef *husart)
+{
+  if (husart->Instance == USART3)
+  {
+    HAL_GPIO_TogglePin(LED_3_GPIO_Port, LED_3_Pin);
+    OTA_Data_Frame_Receive(g_rs485_c1_rx_buf[0]);
+    HAL_UART_Receive_IT(&huart3, (uint8_t *)g_rs485_c1_rx_buf, 1);
+  }
+}
+
+void RS485_Status_Set(RS485_Channel ch, RS485_Status status)
+{
+  if (status == RS485_READ)
+  {
+    switch (ch)
+    {
+    case RS485_CH1:
+      HAL_GPIO_WritePin(RS485_1_DE_GPIO_Port, RS485_1_DE_Pin, GPIO_PIN_RESET);
+      HAL_GPIO_WritePin(RS485_1_RE_GPIO_Port, RS485_1_RE_Pin, GPIO_PIN_RESET);
+      break;
+    case RS485_CH2:
+      HAL_GPIO_WritePin(RS485_2_DE_GPIO_Port, RS485_2_DE_Pin, GPIO_PIN_RESET);
+      HAL_GPIO_WritePin(RS485_2_RE_GPIO_Port, RS485_2_RE_Pin, GPIO_PIN_RESET);
+      break;
+
+    default:
+      break;
+    }
+  }
+  else if (status == RS485_WRITE)
+  {
+    switch (ch)
+    {
+    case RS485_CH1:
+      HAL_GPIO_WritePin(RS485_1_DE_GPIO_Port, RS485_1_DE_Pin, GPIO_PIN_SET);
+      HAL_GPIO_WritePin(RS485_1_RE_GPIO_Port, RS485_1_RE_Pin, GPIO_PIN_SET);
+      break;
+    case RS485_CH2:
+      HAL_GPIO_WritePin(RS485_2_DE_GPIO_Port, RS485_2_DE_Pin, GPIO_PIN_SET);
+      HAL_GPIO_WritePin(RS485_2_RE_GPIO_Port, RS485_2_RE_Pin, GPIO_PIN_SET);
+      break;
+
+    default:
+      break;
+    }
+  }
+  else
+  {
+    return;
+  }
+}
 /* USER CODE END 4 */
 
 /**
-  * @brief  Period elapsed callback in non blocking mode
-  * @note   This function is called  when TIM2 interrupt took place, inside
-  * HAL_TIM_IRQHandler(). It makes a direct call to HAL_IncTick() to increment
-  * a global variable "uwTick" used as application time base.
-  * @param  htim : TIM handle
-  * @retval None
-  */
+ * @brief  Period elapsed callback in non blocking mode
+ * @note   This function is called  when TIM2 interrupt took place, inside
+ * HAL_TIM_IRQHandler(). It makes a direct call to HAL_IncTick() to increment
+ * a global variable "uwTick" used as application time base.
+ * @param  htim : TIM handle
+ * @retval None
+ */
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 {
   /* USER CODE BEGIN Callback 0 */
 
   /* USER CODE END Callback 0 */
-  if (htim->Instance == TIM2) {
+  if (htim->Instance == TIM2)
+  {
     HAL_IncTick();
   }
   /* USER CODE BEGIN Callback 1 */
@@ -188,9 +297,9 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 }
 
 /**
-  * @brief  This function is executed in case of error occurrence.
-  * @retval None
-  */
+ * @brief  This function is executed in case of error occurrence.
+ * @retval None
+ */
 void Error_Handler(void)
 {
   /* USER CODE BEGIN Error_Handler_Debug */
@@ -202,14 +311,14 @@ void Error_Handler(void)
   /* USER CODE END Error_Handler_Debug */
 }
 
-#ifdef  USE_FULL_ASSERT
+#ifdef USE_FULL_ASSERT
 /**
-  * @brief  Reports the name of the source file and the source line number
-  *         where the assert_param error has occurred.
-  * @param  file: pointer to the source file name
-  * @param  line: assert_param error line source number
-  * @retval None
-  */
+ * @brief  Reports the name of the source file and the source line number
+ *         where the assert_param error has occurred.
+ * @param  file: pointer to the source file name
+ * @param  line: assert_param error line source number
+ * @retval None
+ */
 void assert_failed(uint8_t *file, uint32_t line)
 {
   /* USER CODE BEGIN 6 */

@@ -1,21 +1,21 @@
 /* USER CODE BEGIN Header */
 /**
-  ******************************************************************************
-  * @file           : main.h
-  * @brief          : Header for main.c file.
-  *                   This file contains the common defines of the application.
-  ******************************************************************************
-  * @attention
-  *
-  * Copyright (c) 2024 STMicroelectronics.
-  * All rights reserved.
-  *
-  * This software is licensed under terms that can be found in the LICENSE file
-  * in the root directory of this software component.
-  * If no LICENSE file comes with this software, it is provided AS-IS.
-  *
-  ******************************************************************************
-  */
+ ******************************************************************************
+ * @file           : main.h
+ * @brief          : Header for main.c file.
+ *                   This file contains the common defines of the application.
+ ******************************************************************************
+ * @attention
+ *
+ * Copyright (c) 2024 STMicroelectronics.
+ * All rights reserved.
+ *
+ * This software is licensed under terms that can be found in the LICENSE file
+ * in the root directory of this software component.
+ * If no LICENSE file comes with this software, it is provided AS-IS.
+ *
+ ******************************************************************************
+ */
 /* USER CODE END Header */
 
 /* Define to prevent recursive inclusion -------------------------------------*/
@@ -23,20 +23,31 @@
 #define __MAIN_H
 
 #ifdef __cplusplus
-extern "C" {
+extern "C"
+{
 #endif
 
 /* Includes ------------------------------------------------------------------*/
 #include "stm32f1xx_hal.h"
 
-/* Private includes ----------------------------------------------------------*/
-/* USER CODE BEGIN Includes */
+  /* Private includes ----------------------------------------------------------*/
+  /* USER CODE BEGIN Includes */
 
-/* USER CODE END Includes */
+  /* USER CODE END Includes */
 
-/* Exported types ------------------------------------------------------------*/
-/* USER CODE BEGIN ET */
+  /* Exported types ------------------------------------------------------------*/
+  /* USER CODE BEGIN ET */
+  typedef enum
+  {
+    RS485_READ = 0,
+    RS485_WRITE = 1
+  } RS485_Status;
 
+  typedef enum
+  {
+    RS485_CH1 = 0,
+    RS485_CH2 = 1
+  } RS485_Channel;
 /* USER CODE END ET */
 
 /* Exported constants --------------------------------------------------------*/
@@ -46,14 +57,24 @@ extern "C" {
 
 /* Exported macro ------------------------------------------------------------*/
 /* USER CODE BEGIN EM */
+#define RS232_RX_DATA_LENGTH 9
+#define RS485_C1_TX_DATA_LENGTH 32
+#define RS485_C1_RX_DATA_LENGTH 32
+#define RS485_C2_TX_DATA_LENGTH 16
+#define RS485_C2_RX_DATA_LENGTH 16
 
-/* USER CODE END EM */
+#define CTRL_MSG_HEAD_1 0x55
+#define CTRL_MSG_HEAD_2 0xAA
+#define CTRL_MSG_TAIL_1 0x0D
+#define CTRL_MSG_TAIL_2 0x0A
+  /* USER CODE END EM */
 
-/* Exported functions prototypes ---------------------------------------------*/
-void Error_Handler(void);
+  /* Exported functions prototypes ---------------------------------------------*/
+  void Error_Handler(void);
 
-/* USER CODE BEGIN EFP */
-
+  /* USER CODE BEGIN EFP */
+  void Jump_To_Main_Application(void);
+  void RS485_Status_Set(RS485_Channel ch, RS485_Status status);
 /* USER CODE END EFP */
 
 /* Private defines -----------------------------------------------------------*/
@@ -88,9 +109,9 @@ void Error_Handler(void);
 #define PWM_OUT_Pin GPIO_PIN_6
 #define PWM_OUT_GPIO_Port GPIOB
 
-/* USER CODE BEGIN Private defines */
+  /* USER CODE BEGIN Private defines */
 
-/* USER CODE END Private defines */
+  /* USER CODE END Private defines */
 
 #ifdef __cplusplus
 }
