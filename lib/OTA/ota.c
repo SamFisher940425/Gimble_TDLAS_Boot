@@ -7,14 +7,11 @@
 
 #define UID_BASE 0x1FFFF7E8UL
 
+extern uint8_t g_gimble_id;
 extern volatile uint32_t g_ota_flag;
 extern volatile uint32_t g_fw_size;
 
 static const uint8_t aucCRCHi[], aucCRCLo[];
-
-// firmware and hardware
-uint8_t hardware_version[3] = {PRODUCT_TYPE, IC_TYPE, HW_VERSION};
-uint8_t firmware_version[3] = {FIRMWARE_VERSION_MAJOR, FIRMWARE_VERSION_MINOR, FIRMWARE_VERSION_REVISION};
 
 enum OTA_STATUS g_ota_status = OTA_STATUS_NOT_STARTED_IN_BOOT;
 
@@ -27,87 +24,128 @@ struct OTA_message send_msg;
 void OTA_Data_Frame_Receive(uint8_t one_char)
 {
   static enum OTA_RECEIVE_STATE recv_state;
+  static uint8_t *msg_ptr = (uint8_t *)&active_rx_msg;
 
   if (valid_cmd_flag)
     return;
 
   switch (recv_state)
   {
-  case OTA_STATE_RECV_FIX_FIRST:
-    if (one_char == OTA_FIX_HEAD_FIRST_BYTE)
+  case OTA_STATE_RECV_HEAD_1:
+    if (one_char == OTA_FRAME_HEAD_1)
     {
       memset(&active_rx_msg, 0, sizeof(active_rx_msg));
-      active_rx_msg.head.flag_first = one_char;
-      // active_rx_msg.check += one_char;
+      active_rx_msg.head.head_1 = one_char;
 
-      recv_state = OTA_STATE_RECV_FIX_SECOND;
+      recv_state = OTA_STATE_RECV_HEAD_2;
     }
     break;
-  case OTA_STATE_RECV_FIX_SECOND:
-    if (one_char == OTA_FIX_HEAD_SECOND_BYTE)
+  case OTA_STATE_RECV_HEAD_2:
+    if (one_char == OTA_FRAME_HEAD_2)
     {
-      active_rx_msg.head.flag_second = one_char;
-      // active_rx_msg.check += one_char;
+      active_rx_msg.head.head_2 = one_char;
 
-      recv_state = OTA_STATE_RECV_VERSION;
-    }
-    break;
-  case OTA_STATE_RECV_VERSION:
-    // if (one_char == FIX_HEAD_SECOND_BYTE)
-    //{
-    //     active_rx_msg.head.flag_second = one_char;
-    //  active_rx_msg.check += one_char;
-    recv_state = OTA_STATE_RECV_ID;
-    //}
-    break;
-  case OTA_STATE_RECV_ID:
-    if (one_char < OTA_ID_MESSGAE_MAX)
-    {
-      active_rx_msg.head.msg_id = one_char;
-      // active_rx_msg.check += one_char;
-      recv_state = OTA_STATE_RECV_LEN_LOW;
+      recv_state = OTA_STATE_RECV_SRC_ID;
     }
     else
-      recv_state = OTA_STATE_RECV_FIX_FIRST;
+    {
+      recv_state = OTA_STATE_RECV_HEAD_1;
+    }
     break;
-  case OTA_STATE_RECV_LEN_LOW:
-    active_rx_msg.head.length = one_char;
-    // active_rx_msg.check += one_char;
-    // if (active_rx_msg.head.length == 0)
-    //    recv_state = OTA_STATE_RECV_CHECK;
-    // else
-    recv_state = OTA_STATE_RECV_LEN_HIGH;
+  case OTA_STATE_RECV_SRC_ID:
+    if (one_char == 0x00)
+    {
+      recv_state = OTA_STATE_RECV_DST_ID;
+    }
+    else
+    {
+      recv_state = OTA_STATE_RECV_HEAD_1;
+    }
     break;
-  case OTA_STATE_RECV_LEN_HIGH:
-    active_rx_msg.head.length += one_char * 0x100;
-    // active_rx_msg.check += one_char;
-    if (active_rx_msg.head.length == 0)
+  case OTA_STATE_RECV_DST_ID:
+    if (one_char == g_gimble_id)
+    {
+      recv_state = OTA_STATE_RECV_FUNC_CODE;
+    }
+    else
+    {
+      recv_state = OTA_STATE_RECV_HEAD_1;
+    }
+    break;
+  case OTA_STATE_RECV_FUNC_CODE:
+    if (one_char < OTA_FUNC_CODE_MAX)
+    {
+      active_rx_msg.head.func_code = one_char;
+
+      recv_state = OTA_STATE_RECV_DATA_LEN;
+    }
+    else
+    {
+      recv_state = OTA_STATE_RECV_HEAD_1;
+    }
+    break;
+  case OTA_STATE_RECV_DATA_LEN:
+    active_rx_msg.head.data_len = one_char;
+
+    if (active_rx_msg.head.data_len == 0)
+    {
       recv_state = OTA_STATE_RECV_CHECK;
+    }
     else
+    {
       recv_state = OTA_STATE_RECV_DATA;
+    }
     break;
   case OTA_STATE_RECV_DATA:
-    active_rx_msg.data[active_rx_msg.recv_count++] = one_char;
-    // active_rx_msg.check += one_char;
-    if (active_rx_msg.recv_count >= active_rx_msg.head.length)
+    active_rx_msg.data[active_rx_msg.tail_1++] = one_char;
+
+    if (active_rx_msg.tail_1 >= active_rx_msg.head.data_len)
+    {
       recv_state = OTA_STATE_RECV_CHECK;
+    }
     break;
   case OTA_STATE_RECV_CHECK:
-    recv_state = OTA_STATE_RECV_FIX_FIRST;
-    active_rx_msg.check = active_rx_msg.head.length + active_rx_msg.head.msg_id + active_rx_msg.head.flag_second + active_rx_msg.head.flag_first;
-    for (uint16_t i = 0; i < active_rx_msg.head.length; i++)
+    for (uint16_t i = 0; i < active_rx_msg.head.data_len + sizeof(active_rx_msg.head); i++)
     {
-      active_rx_msg.check += active_rx_msg.data[i];
+      active_rx_msg.check += *(msg_ptr + i);
     }
 
     if (active_rx_msg.check == one_char)
     {
+      recv_state = OTA_STATE_RECV_TAIL_1;
+    }
+    else
+    {
+      recv_state = OTA_STATE_RECV_HEAD_1;
+    }
+    break;
+  case OTA_STATE_RECV_TAIL_1:
+    if (one_char == OTA_FRAME_TAIL_1)
+    {
+      active_rx_msg.tail_1 = one_char;
+      recv_state = OTA_STATE_RECV_TAIL_2;
+    }
+    else
+    {
+      recv_state = OTA_STATE_RECV_HEAD_1;
+    }
+    break;
+  case OTA_STATE_RECV_TAIL_2:
+    if (one_char == OTA_FRAME_TAIL_2)
+    {
+      active_rx_msg.tail_2 = one_char;
       memcpy(&valid_rx_msg, &active_rx_msg, sizeof(valid_rx_msg));
       valid_cmd_flag = 1;
     }
+    else
+    {
+      recv_state = OTA_STATE_RECV_HEAD_1;
+    }
     break;
+
   default:
-    recv_state = OTA_STATE_RECV_FIX_FIRST;
+    recv_state = OTA_STATE_RECV_HEAD_1;
+    break;
   }
 }
 
@@ -115,8 +153,7 @@ void OTA_CMD_Parse(void)
 {
   uint32_t data_offset = 0;
   uint32_t data_len = 0;
-  int32_t res = -1;
-  uint8_t temp_data_byte[18];
+  int32_t result = -1;
   uint16_t crc_calc, crc_get;
   static uint8_t erase_all_flag = 0;
 
@@ -124,162 +161,116 @@ void OTA_CMD_Parse(void)
   {
     return;
   }
-  if ((active_rx_msg.data[0] != MAIN_BOARD_ID) && (valid_rx_msg.head.msg_id != OTA_ID_HEARTBEAT))
-  {
-    valid_cmd_flag = 0;
-    return;
-  }
 
   last_cmd_time = HAL_GetTick();
 
-  switch (valid_rx_msg.head.msg_id)
+  switch (valid_rx_msg.head.func_code)
   {
-  case OTA_ID_HEARTBEAT:
-    temp_data_byte[0] = ALL_BOARD;
-    temp_data_byte[1] = (0x01 << MAIN_BOARD_ID);
-    temp_data_byte[2] = 0;
-    Send_Response_Without_ID(OTA_ID_HEARTBEAT, temp_data_byte, 3);
-    break;
-  case OTA_ID_START_UPDATE:
+  case OTA_FC_BEGIN:
     if (0 == erase_all_flag)
     {
-      res = Erase_All_Page();
+      result = Erase_All_Page();
       erase_all_flag = 1;
     }
     else
     {
-      res = 0;
+      result = 0;
     }
     g_ota_status = OTA_STATUS_NOT_STARTED_IN_BOOT;
-    Send_Response(OTA_ID_START_UPDATE, (uint8_t *)&res, 1);
-    g_fw_size = *(uint32_t *)&active_rx_msg.data[1];
+    Send_Response(OTA_FC_BEGIN, (uint8_t *)&result, 1);
+    g_fw_size = *(uint32_t *)&valid_rx_msg.data[1];
     break;
-  case OTA_ID_UPDATE:
+  case OTA_FC_TRANSMIT:
     // update main data
     if (g_ota_status == OTA_STATUS_NOT_STARTED_IN_BOOT)
     {
       g_ota_status = OTA_STATUS_UPDATING;
     }
-    data_offset = *(uint32_t *)&active_rx_msg.data[1];
-    data_len = active_rx_msg.recv_count - 5;
+    data_offset = *(uint32_t *)&valid_rx_msg.data[0];
+    data_len = valid_rx_msg.head.data_len - 4;
     if (data_len + data_offset > (Get_Flash_Size() - 16 - 1) * 0x400)
     {
-      res = -2;
+      result = -2;
       g_ota_status = OTA_STATUS_FAIL;
       break;
     }
-
     // check if data blank or match
     if (!Check_Blank(MAIN_PROGRAM_ADDR + data_offset, data_len))
     {
-      if (!Check_Match(MAIN_PROGRAM_ADDR + data_offset, &active_rx_msg.data[5], data_len))
+      if (!Check_Match(MAIN_PROGRAM_ADDR + data_offset, &valid_rx_msg.data[5], data_len))
       {
-        res = -2;
+        result = -2;
         g_ota_status = OTA_STATUS_FAIL;
       }
       else
       {
-        res = 0;
+        result = 0;
       }
       erase_all_flag = 0;
     }
     else
     {
-      res = Internal_Flash_Program(data_offset, &active_rx_msg.data[5], data_len);
+      result = Internal_Flash_Program(data_offset, &valid_rx_msg.data[5], data_len);
       erase_all_flag = 0;
     }
-    Send_Response(OTA_ID_UPDATE, (uint8_t *)&res, 1);
+    Send_Response(OTA_FC_TRANSMIT, (uint8_t *)&result, 1);
     break;
-  case OTA_ID_GET_STATUS:
-    Send_Response(OTA_ID_GET_STATUS, (uint8_t *)&g_ota_status, 1);
+  case OTA_FC_GET_STATE:
+    Send_Response(OTA_FC_GET_STATE, (uint8_t *)&g_ota_status, 1);
     break;
-  case OTA_ID_UPDATE_OVER:
+  case OTA_FC_FINISH:
     // check crc
     crc_calc = Calc_CRC16((uint8_t *)MAIN_PROGRAM_ADDR, g_fw_size - 2);
     crc_get = *(uint16_t *)(MAIN_PROGRAM_ADDR + g_fw_size - 2);
     if (crc_calc == crc_get)
     {
       g_ota_status = OTA_STATUS_SUCCESS;
-      // erase flag or not
-      // Save_OTA_Flag();
     }
     else
     {
       g_ota_status = OTA_STATUS_FAIL;
     }
-
     // response
-    Send_Response(OTA_ID_UPDATE_OVER, (uint8_t *)&g_ota_status, 1);
+    Send_Response(OTA_FC_FINISH, (uint8_t *)&g_ota_status, 1);
     break;
-
-  case OTA_ID_RESET:
+  case OTA_FC_RESET:
     // no data
-    Send_Response(OTA_ID_RESET, (uint8_t *)&g_ota_status, 0);
-    HAL_Delay(10);
-
+    Send_Response(OTA_FC_RESET, (uint8_t *)&g_ota_status, 0);
+    HAL_Delay(50);
     Jump_To_Main_Application();
     break;
-  case OTA_ID_GET_VERSION:
-    Send_Response(valid_rx_msg.head.msg_id, (uint8_t *)&temp_data_byte, 0);
-    break;
-  case OTA_ID_GET_INFO:
-    temp_data_byte[0] = hardware_version[0];
-    temp_data_byte[1] = hardware_version[1];
-    temp_data_byte[2] = hardware_version[2];
-    temp_data_byte[3] = firmware_version[0];
-    temp_data_byte[4] = firmware_version[1];
-    temp_data_byte[5] = firmware_version[2];
-    memcpy(temp_data_byte + 6, (uint8_t *)UID_BASE, 12);
-    Send_Response(valid_rx_msg.head.msg_id, (uint8_t *)&temp_data_byte, 18);
+
+  default:
     break;
   }
 
   valid_cmd_flag = 0;
 }
 
-void Send_Response(uint8_t msg_id, uint8_t *data, uint8_t len)
+void Send_Response(uint8_t func_code, uint8_t *data, uint8_t len)
 {
   uint8_t *_tx_buf = (uint8_t *)&send_msg;
-  send_msg.head.flag_first = OTA_FIX_HEAD_FIRST_BYTE;
-  send_msg.head.flag_second = OTA_FIX_HEAD_SECOND_BYTE;
-  send_msg.head.msg_id = msg_id;
-  send_msg.head.length = len + 1;
-  send_msg.check = 0;
-  send_msg.data[0] = MAIN_BOARD_ID;
-
-  if (data != 0 && len != 0)
-  {
-    memcpy(&send_msg.data[1], data, len);
-  }
-  for (uint32_t i = 0; i < send_msg.head.length + sizeof(send_msg.head); i++)
-  {
-    send_msg.check += _tx_buf[i];
-  }
-  send_msg.data[send_msg.head.length] = send_msg.check;
-
-  HAL_UART_Transmit_DMA(&huart3, (uint8_t *)&send_msg, (sizeof(send_msg.head) + send_msg.head.length + 1));
-}
-
-void Send_Response_Without_ID(uint8_t msg_id, uint8_t *data, uint8_t len)
-{
-  uint8_t *_tx_buf = (uint8_t *)&send_msg;
-  send_msg.head.flag_first = OTA_FIX_HEAD_FIRST_BYTE;
-  send_msg.head.flag_second = OTA_FIX_HEAD_SECOND_BYTE;
-  send_msg.head.msg_id = msg_id;
-  send_msg.head.length = len;
+  send_msg.head.head_1 = OTA_FRAME_HEAD_1;
+  send_msg.head.head_2 = OTA_FRAME_HEAD_2;
+  send_msg.head.src_id = g_gimble_id;
+  send_msg.head.dst_id = valid_rx_msg.head.src_id;
+  send_msg.head.func_code = func_code;
+  send_msg.head.data_len = len;
   send_msg.check = 0;
 
   if (data != 0 && len != 0)
   {
     memcpy(&send_msg.data[0], data, len);
   }
-  for (uint32_t i = 0; i < send_msg.head.length + sizeof(send_msg.head); i++)
+  for (uint32_t i = 0; i < send_msg.head.data_len + sizeof(send_msg.head); i++)
   {
     send_msg.check += _tx_buf[i];
   }
-  send_msg.data[send_msg.head.length] = send_msg.check;
+  send_msg.data[send_msg.head.data_len] = send_msg.check;
+  send_msg.data[send_msg.head.data_len+1] = OTA_FRAME_TAIL_1;
+  send_msg.data[send_msg.head.data_len+2] = OTA_FRAME_TAIL_2;
 
-  HAL_UART_Transmit_DMA(&huart3, (uint8_t *)&send_msg, (sizeof(send_msg.head) + send_msg.head.length + 1));
+  HAL_UART_Transmit_DMA(&huart3, (uint8_t *)&send_msg, (sizeof(send_msg.head) + send_msg.head.data_len + 1));
 }
 
 uint16_t Calc_CRC16(uint8_t *pucFrame, uint32_t usLen)

@@ -53,6 +53,9 @@ typedef void (*pFunction)(void); /*!< Function pointer definition */
 extern enum OTA_STATUS g_ota_status;
 extern uint64_t last_cmd_time;
 
+uint8_t g_nvm_data[NVM_DATA_CNT] = {0};
+uint8_t g_gimble_id = 1;
+
 volatile uint32_t g_ota_flag = 0;
 volatile uint32_t g_fw_size = 0;
 
@@ -86,6 +89,18 @@ int main(void)
   // valid firmware or blank
   g_ota_flag = Read_OTA_Flag();
   g_fw_size = Read_OTA_Size();
+  Read_Nvm_Data(g_nvm_data);
+  g_gimble_id = g_nvm_data[0];
+  if (g_gimble_id < 1)
+  {
+    g_gimble_id = 1;
+  }
+  if (g_gimble_id > 254)
+  {
+    g_gimble_id = 254;
+  }
+  g_nvm_data[0] = g_gimble_id;
+  Save_Nvm_Data(g_nvm_data);
 
   // g_ota_flag = OTA_GOTO_BOOT_FLAG;
   if (((g_ota_flag == OTA_GOTO_JUMP_FLAG) || (g_ota_flag == 0xFFFFFFFF)) && ((*(uint32_t *)(MAIN_PROGRAM_ADDR)) != 0xFFFFFFFF))
