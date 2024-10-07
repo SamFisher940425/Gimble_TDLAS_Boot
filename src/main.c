@@ -67,7 +67,8 @@ volatile uint8_t g_rs485_c1_rx_buf[RS485_C1_RX_DATA_LENGTH] = {0};
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 /* USER CODE BEGIN PFP */
-void HAL_USART_RxCpltCallback(USART_HandleTypeDef *husart);
+void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart);
+void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -89,8 +90,8 @@ int main(void)
   // valid firmware or blank
   g_ota_flag = Read_OTA_Flag();
   g_fw_size = Read_OTA_Size();
-  Read_Nvm_Data(g_nvm_data);
-  g_gimble_id = g_nvm_data[0];
+  // Read_Nvm_Data(g_nvm_data);
+  // g_gimble_id = g_nvm_data[0];
   if (g_gimble_id < 1)
   {
     g_gimble_id = 1;
@@ -236,13 +237,21 @@ void Jump_To_Main_Application(void)
   Jump_To_Application();
 }
 
-void HAL_USART_RxCpltCallback(USART_HandleTypeDef *husart)
+void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 {
-  if (husart->Instance == USART3)
+  if (huart->Instance == USART3)
   {
     HAL_GPIO_TogglePin(LED_3_GPIO_Port, LED_3_Pin);
     OTA_Data_Frame_Receive(g_rs485_c1_rx_buf[0]);
     HAL_UART_Receive_IT(&huart3, (uint8_t *)g_rs485_c1_rx_buf, 1);
+  }
+}
+
+void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)
+{
+  if (huart->Instance == USART3)
+  {
+    RS485_Status_Set(RS485_CH1, RS485_READ);
   }
 }
 
