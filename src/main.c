@@ -158,7 +158,7 @@ int main(void)
 
     if (g_ota_status == OTA_STATUS_NOT_STARTED_IN_BOOT)
     {
-      HAL_GPIO_WritePin(LED_2_GPIO_Port, LED_2_Pin, GPIO_PIN_SET);
+      HAL_GPIO_WritePin(LED_2_GPIO_Port, LED_2_Pin, GPIO_PIN_RESET);
     }
     else if (g_ota_status == OTA_STATUS_UPDATING)
     {
